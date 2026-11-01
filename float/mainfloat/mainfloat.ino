@@ -11,98 +11,90 @@ MS5837 sensor;
 #define RYLR Serial2
 #define lights Serial1
 
-int holding = 0;   // how long the float has been maintaing depth
-int dataIndex = 0; // current data point index
-float depth = 0.0f;
-float output = 0.0f;
+int holding = 0;     // how long the float has been maintaing depth
+int dataIndex = 0;   // current data point index
+float depth = 0.0f;  // meters
+float output = 0.0f; // micro seconds
 char message;
 
 bool SIM = false; // weather or not its in simualtion mode
-float descentDepth = 2;
-float Icesheet = 1;
-// 0.46
+
+float descentDepth = 2; // meters
+
 float setpoint = descentDepth;
 
-float surfaceDepth = 0; // the depth offset
+float surfaceDepth = 0; // the depth offset in meters
 
-Servo engine;
+Servo syringe;
 
 double Kp = 360.0, Ki = 18, Kd = 0.0;
 
 float fastTol = 0.20; // meters
 float slowTol = 0.05; // meters
 float fastMiSc = 315; // micro seconds
-float slowMiSc = 50;
+float slowMiSc = 50;  // micro seconds
 
 void controller() {
-    // output = 1327;
-    // if (depth - slowTol < setpoint) {
-    //     Serial.println("slowdown");
-    //     output = 1327 + slowMiSc;
-    // } else if (depth - fastTol < setpoint) {
-    //     Serial.println("slowup");
-    //     output = 1327 + fastMiSc;
-    // }
+    // this is an adapted form of Dwayne's "five state machine". see
     float error = setpoint - depth;
-    Serial.print("E");
-    Serial.println(error);
-    // Serial.print("I");
-    // Serial.println(depth);
-    // Serial.print("S");
-    // Serial.println(setpoint);
+
     if (fabs(error) <= slowTol) {
-        // State 3: inside target window. Do not chase noise.
         output = 1327;
         Serial.println("HOLD_WINDOW");
     } else if (error > fastTol) {
-        // State 1: VP is far above/shallower than target. Move down quickly.
         output = 1327 + fastMiSc;
-        Serial.println("FAST_DEEPER");
+        Serial.println("FAST_DOWN");
     } else if (error > slowTol) {
-        // State 2: VP is just above/shallower than target. Move down gently.
         output = 1327 + slowMiSc;
-        Serial.println("SLOW_DEEPER");
+        Serial.println("SLOW_DOWN");
     } else if (error < -fastTol) {
-        // State 5: VP is far below/deeper than target. Move up quickly.
         output = 1327 - fastMiSc;
-        Serial.println("FAST_SHALLOWER");
+        Serial.println("FAST_UP");
     } else {
-        // State 4: VP is just below/deeper than target. Move up gently.
         output = 1327 - slowMiSc;
-        Serial.println("SLOW_SHALLOWER");
+        Serial.println("SLOW_UP");
     }
 }
 
-void sendradiomessage(String msg) {
+void sendRadioMessage(String msg) {
     RYLR.print("AT+SEND=");
-    RYLR.print("82");
+    RYLR.print(
+        "82"); // this NEEDS to be the correct radio id for the base station.
     RYLR.print(",");
     RYLR.print(msg.length());
     RYLR.print(",");
     RYLR.print(msg);
     RYLR.print("\r\n");
 }
+
+void checkForCommand() {
+    if (RYLR.available() > 0) {
+        String line = RYLR.readStringUntil(10, 1000);
+        if (line[1] == 82 && line[2] == 67) {
+            message = line[10];
+        }
+        Serial.println(line);
+        line = "";
+    }
+}
+
 void relay() {
     int lineindex = 0;
-    char message;
 
     File myFile = SD.open("data.txt"); // open the file
     while (true) {
         updateDepth();
         controller();
 
-        engine.writeMicroseconds(int(output));
-        if (RYLR.available() > 0) {
-            String line = RYLR.readStringUntil(10, 1000);
-            if (line[1] == 82 && line[2] == 67) {
-                message = line[10];
-            }
-            line = "";
-        }
+        syringe.writeMicroseconds(int(output));
+
+        checkForCommand();
+
         if (message == 'U') { // This means the float has been recovered and
                               // should upload data
-            message = 'o';
-            engine.write(0);
+            message = 0;      // set the message to null so it doesn't get
+                              // interprated twice
+            syringe.write(0);
             lights.println("w");
             break;
         }
@@ -113,30 +105,24 @@ void relay() {
         dataLine.trim(); // remove any nonsense
 
         if (dataLine.length() > 0) {
-            sendradiomessage(dataLine);
+            sendRadioMessage(dataLine);
             Serial.println("Sent: " + dataLine);
         }
 
         // wait for the topside to acknowledge
         while (message != 'n' or dataLine == "stop") {
-            if (RYLR.available() > 0) {
-                String line = RYLR.readStringUntil(10, 1000);
-                Serial.println(line);
-                if (line[1] == 82 && line[2] == 67) {
-                    Serial.print("message:");
-                    message = line[10];
-                    Serial.println(message);
-                }
-            }
+            checkForCommand();
             dataLine = "";
             if (message == 'r') {
-                sendradiomessage(dataLine);
-                message = 'o';
+                sendRadioMessage(dataLine);
+                message = 0; // set the message to null so it doesn't get
+                             // interprated twice
             }
         }
-        message = 'o';
+        message =
+            0; // set the message to null so it doesn't get interprated twice
     }
-    sendradiomessage("stop");
+    sendRadioMessage("stop");
 }
 void updateDepth() {
     if (SIM) {
@@ -164,23 +150,17 @@ void updateDepth() {
 }
 
 void wait() {
-    engine.writeMicroseconds(1000);
+    syringe.writeMicroseconds(1000);
     Serial.println("WATING");
     while (true) {
 
-        if (RYLR.available() > 0) {
-            String line = RYLR.readStringUntil(10, 1000);
-            if (line[1] == 82 && line[2] == 67) {
-                message = line[10];
-            }
-            Serial.println(line);
-            line = "";
-        }
+        checkForCommand();
         // Serial.println(message);
         if (message == 'H') {
-            message = 'o';
+            message = 0; // set the message to null so it doesn't get
+                         // interprated twice
             lights.print("r");
-            engine.writeMicroseconds(1000);
+            syringe.writeMicroseconds(1000);
             RYLR.print("AT+SEND=82,2,hi");
             RYLR.print("\r\n");
             updateDepth();
@@ -189,7 +169,8 @@ void wait() {
             surfaceDepth = depth;
         }
         if (message == 'D') {
-            message = 'o';
+            message = 0; // set the message to null so it doesn't get
+                         // interprated twice
             RYLR.print("AT+SEND=82,2,good buoy");
             RYLR.print("\r\n");
             break;
@@ -218,24 +199,26 @@ void descend() {
     holding = 0;
     while (true) {
 
-        static elapsedMillis datalogclock;
+        static elapsedMillis pollingTimer;
 
         updateDepth();
         controller();
 
         // send a debug message
-        sendradiomessage(String(depth) + " : " + String(output) +
+        // tf is even going on here, like why did i do it like that?!??!
+        sendRadioMessage(String(depth) + " : " + String(output) +
                          " ERROR: " + String(abs(descentDepth - depth)) + "," +
                          String(setpoint) + "HOLDE:" + String(holding));
+
         if (SIM) {
             Serial.print("D");
             Serial.println(output);
         } else {
-            engine.writeMicroseconds(int(output));
+            syringe.writeMicroseconds(int(output));
         }
 
-        if (datalogclock >= 5000) {
-            datalogclock = 0;
+        if (pollingTimer >= 5000) {
+            pollingTimer = 0;
             log();
 
             if (abs(descentDepth - depth) < 0.33) {
@@ -248,17 +231,12 @@ void descend() {
                 break;
             }
         }
-        if (RYLR.available() > 0) {
-            String line = RYLR.readStringUntil(10, 1000);
-            if (line[1] == 82 && line[2] == 67) {
-                message = line[10];
-            }
-            Serial.println(line);
-            line = "";
-        }
+        checkForCommand();
+
         if (message == 'E') { // emergancy stop
-            message = 'o';
-            engine.writeMicroseconds(1000);
+            message = 0;      // set the message to null so it doesn't get
+                              // interprated twice
+            syringe.writeMicroseconds(1000);
             while (true) {
                 delay(10);
             }
@@ -267,61 +245,28 @@ void descend() {
 }
 
 void ascend() {
-    setpoint = Icesheet;
-
+    syringe.writeMicroseconds(1000);
     holding = 0;
+    static elapsedMillis pollingTimer;
+
     while (true) {
-
-        static elapsedMillis datalogclock;
-
-        updateDepth();
-
-        controller();
-
-        // send a debug message
-        sendradiomessage(String(depth) + " : " + String(output) +
-                         " ERROR: " + String(abs(descentDepth - depth)) + "," +
-                         String(setpoint) + "HOLDE:" + String(holding));
-        if (SIM) {
-            Serial.print("D");
-            Serial.println(output);
-        } else {
-            engine.writeMicroseconds(int(output));
-        }
-
-        if (datalogclock >= 5000) {
-            datalogclock = 0;
-            log();
-            // Serial.println(holding);
-            if (abs(Icesheet - depth) < 0.33) {
+        if (pollingTimer >= 1000) { // check every seccond if it's surfaced
+                                    // we want it to stop bobbing before we do anything else
+            pollingTimer = 0;
+            updateDepth();
+            if (abs(depth) < 0.05) {
                 holding++;
             } else {
                 holding = 0;
             }
-            // holding = 0;
-            if (holding > 7) {
-                break;
-            }
         }
-        if (RYLR.available() > 0) {
-            String line = RYLR.readStringUntil(10, 1000);
-            if (line[1] == 82 && line[2] == 67) {
-                message = line[10];
-            }
-            Serial.println(line);
-            line = "";
-        }
-        if (message == 'E') { // emergency stop
-            message = 'o';
-            engine.writeMicroseconds(1000);
-            while (true) {
-                delay(10);
-            }
+        if (holding == 5) {
+            break;
         }
     }
 }
 
-void setup() {
+void setup() { // this whole section is a mess and i've made peace with that
 
     Serial.begin(115200);
     RYLR.begin(115200);
@@ -333,7 +278,7 @@ void setup() {
         Serial.println("D:");
     }
     if (!SIM) {
-        engine.attach(9);
+        syringe.attach(9);
     }
     Serial.println("conneted");
     RYLR.print("AT\r\n");
@@ -372,8 +317,8 @@ void setup() {
 }
 
 void loop() {
-    // the lights take single charectors over serial corrisponding to predefined
-    // colours
+    // the lights take in single characters over serial corrisponding to
+    // predefined colours
 
     if (!SIM) {
         lights.print("R");
