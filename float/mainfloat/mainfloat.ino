@@ -26,8 +26,9 @@ float setpoint = descentDepth;
 float surfaceDepth = 0; // the depth offset in meters
 
 Servo syringe;
+// for our syringe 1000 μs is empty and NUMBER μs is full
 
-double Kp = 360.0, Ki = 18, Kd = 0.0;
+// double Kp = 360.0, Ki = 18, Kd = 0.0;
 
 float fastTol = 0.20; // meters
 float slowTol = 0.05; // meters
@@ -94,7 +95,7 @@ void relay() {
                               // should upload data
             message = 0;      // set the message to null so it doesn't get
                               // interprated twice
-            syringe.write(0);
+            syringe.writewriteMicroseconds(1000);
             lights.println("w");
             break;
         }
@@ -208,7 +209,7 @@ void descend() {
         // tf is even going on here, like why did i do it like that?!??!
         sendRadioMessage(String(depth) + " : " + String(output) +
                          " ERROR: " + String(abs(descentDepth - depth)) + "," +
-                         String(setpoint) + "HOLDE:" + String(holding));
+                         String(setpoint) + "HOLD:" + String(holding));
 
         if (SIM) {
             Serial.print("D");
@@ -227,7 +228,7 @@ void descend() {
                 holding = 0;
             }
 
-            if (holding > 5) {
+            if (holding >= 6) {
                 break;
             }
         }
@@ -250,8 +251,9 @@ void ascend() {
     static elapsedMillis pollingTimer;
 
     while (true) {
-        if (pollingTimer >= 1000) { // check every seccond if it's surfaced
-                                    // we want it to stop bobbing before we do anything else
+        if (pollingTimer >=
+            1000) { // check every seccond if it's surfaced
+                    // we want it to stop bobbing before we do anything else
             pollingTimer = 0;
             updateDepth();
             if (abs(depth) < 0.05) {
